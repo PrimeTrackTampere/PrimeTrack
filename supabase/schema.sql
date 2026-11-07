@@ -1,0 +1,21 @@
+-- Run in Supabase SQL editor. All user-owned rows are protected by RLS.
+create table public.workouts (id uuid primary key default gen_random_uuid(),user_id uuid not null references auth.users(id) on delete cascade, title text not null default 'Workout', performed_at timestamptz not null default now(), created_at timestamptz not null default now());
+create table public.workout_sets (id uuid primary key default gen_random_uuid(),workout_id uuid not null references public.workouts(id) on delete cascade,user_id uuid not null references auth.users(id) on delete cascade,exercise text not null,position integer not null,weight_kg numeric(8,2) not null check(weight_kg>=0),reps integer not null check(reps>=0),created_at timestamptz not null default now());
+create table public.body_logs (id uuid primary key default gen_random_uuid(),user_id uuid not null references auth.users(id) on delete cascade,weight_kg numeric(6,2) not null check(weight_kg>0),recorded_at timestamptz not null default now());
+create table public.progress_photos (id uuid primary key default gen_random_uuid(),user_id uuid not null references auth.users(id) on delete cascade,storage_path text not null,recorded_at timestamptz not null default now());
+create index on public.workouts(user_id,performed_at desc);
+create index on public.workout_sets(user_id,exercise);
+create index on public.body_logs(user_id,recorded_at desc);
+create index on public.progress_photos(user_id,recorded_at desc);
+alter table public.workouts enable row level security;
+alter table public.workout_sets enable row level security;
+alter table public.body_logs enable row level security;
+alter table public.progress_photos enable row level security;
+create policy "own workouts" on public.workouts for all to authenticated using (user_id=(select auth.uid())) with check (user_id=(select auth.uid()));
+create policy "own sets" on public.workout_sets for all to authenticated using (user_id=(select auth.uid()) and exists(select 1 from public.workouts w where w.id=workout_id and w.user_id=(select auth.uid()))) with check (user_id=(select auth.uid()) and exists(select 1 from public.workouts w where w.id=workout_id and w.user_id=(select auth.uid())));
+create policy "own body logs" on public.body_logs for all to authenticated using (user_id=(select auth.uid())) with check (user_id=(select auth.uid()));
+create policy "own photos" on public.progress_photos for all to authenticated using (user_id=(select auth.uid())) with check (user_id=(select auth.uid()));
+insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types) values ('progress','progress',false,10485760,array['image/jpeg','image/png','image/webp']) on conflict(id) do nothing;
+create policy "photo read" on storage.objects for select to authenticated using(bucket_id='progress' and (storage.foldername(name))[1]=(select auth.uid())::text);
+create policy "photo insert" on storage.objects for insert to authenticated with check(bucket_id='progress' and (storage.foldername(name))[1]=(select auth.uid())::text);
+create policy "photo delete" on storage.objects for delete to authenticated using(bucket_id='progress' and (storage.foldername(name))[1]=(select auth.uid())::text);
