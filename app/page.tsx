@@ -77,14 +77,23 @@ export default function Home(){
  async function saveSession(){if(!user||!draft)return;const blocks=draft.blocks.filter(b=>b.sets.length);if(!draft.title.trim()||!blocks.length){setMessage(t('Add a name and at least one exercise','Añade un nombre y al menos un ejercicio'));return}
   const payload:{exercise:string;weight_kg:number;reps:number;set_type:Kind;note:string}[]=[]
   for(const b of blocks)for(const s of b.sets){if(s.weight_kg.trim()===''||s.reps.trim()===''||!Number.isFinite(Number(s.weight_kg))||Number(s.weight_kg)<0||!Number.isInteger(Number(s.reps))||Number(s.reps)<0){setMessage(t('Fill in every set with valid kg and reps','Completa todas las series con kilos y repeticiones válidos'));return}payload.push({exercise:b.name,weight_kg:Number(s.weight_kg),reps:Number(s.reps),set_type:s.set_type,note:s.note})}
-  setBusy(true);const {error}=await supabase.rpc('save_training_session',{p_workout_id:draft.editId,p_routine_id:draft.routineId,p_title:draft.title.trim(),p_notes:draft.notes,p_sets:payload});setBusy(false);if(error){setMessage(error.message);return}
+  setBusy(true);
+  // A deleted workout must never be updated. Treat a stale edit as a new session.
+  let workoutId=draft.editId;
+  if(workoutId){
+    const {data:existing,error:lookupError}=await supabase.from('workouts').select('id').eq('id',workoutId).eq('user_id',user.id).maybeSingle();
+    if(lookupError){setBusy(false);setMessage(lookupError.message);return}
+    if(!existing){workoutId=null;setDraft(d=>d?{...d,editId:null}:d)}
+  }
+  const {error}=await supabase.rpc('save_training_session',{p_workout_id:workoutId,p_routine_id:draft.routineId,p_title:draft.title.trim(),p_notes:draft.notes,p_sets:payload});
+  setBusy(false);if(error){setMessage(error.message);return}
   localStorage.removeItem(`primetrack-draft-${user.id}`);
 setDraft(null);
 setTab('Workout');
 setMsg(t('Workout saved','Entrenamiento guardado'));
 await load(user.id);
  }
- async function removeWorkout(w:Workout){if(!user||!window.confirm(t('Delete this workout permanently?','¿Eliminar este entrenamiento definitivamente?')))return;const {error}=await supabase.from('workouts').delete().eq('id',w.id).eq('user_id',user.id);if(error)setMessage(error.message);else await load(user.id)}
+ async function removeWorkout(w:Workout){if(!user||!window.confirm(t('Delete this workout permanently?','¿Eliminar este entrenamiento definitivamente?')))return;const {error}=await supabase.from('workouts').delete().eq('id',w.id).eq('user_id',user.id);if(error)setMessage(error.message);else{setDraft(d=>d?.editId===w.id?{...d,editId:null}:d);await load(user.id)}}
  async function removeRoutine(r:Routine){if(!user||!window.confirm(t('Delete this routine? Previous sessions will remain.','¿Eliminar esta rutina? Las sesiones anteriores se conservarán.')))return;const {error}=await supabase.from('routine_templates').delete().eq('id',r.id).eq('user_id',user.id);if(error)setMessage(error.message);else await load(user.id)}
  async function saveWeight(){if(!user||!Number(bodyWeight)||Number(bodyWeight)<=0)return;const {error}=await supabase.from('body_logs').insert({user_id:user.id,weight_kg:Number(bodyWeight)});setMsg(error?.message||t('Body weight saved','Peso guardado'));if(!error){setBodyWeight('');await load(user.id)}}
  async function upload(file?:File){if(!user||!file)return;if(!['image/jpeg','image/png','image/webp'].includes(file.type)||file.size>10*1024*1024){setMessage('JPG / PNG / WebP · max 10 MB');return}setBusy(true);const path=`${user.id}/${crypto.randomUUID()}.${file.type.split('/')[1]}`;const {error}=await supabase.storage.from('progress').upload(path,file,{contentType:file.type});if(error){setMessage(error.message);setBusy(false);return}const result=await supabase.from('progress_photos').insert({user_id:user.id,storage_path:path});if(result.error){await supabase.storage.from('progress').remove([path]);setMessage(result.error.message)}else{setMsg(t('Photo uploaded','Foto subida'));await load(user.id)}setBusy(false)}
